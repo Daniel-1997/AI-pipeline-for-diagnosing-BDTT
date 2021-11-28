@@ -63,10 +63,7 @@ model.to(device)
 
 img_file_dir = '/data/ljm/LRCN/case_CT'
 img_file_list = ['process_1', 'process_2', 'process_3', 'process_4']         # need change
-
-num_total = 0
-num_pos = 0
-stat = {'score': [], 'name': [], 'num_total': [], 'num_tp': [], 'num_tp_ratio': []}
+stat = {'score': [], 'name': [], 'num_tp_ratio': []}
 for img_file in img_file_list:
     imgs_dir = os.path.join(img_file_dir,  img_file)
     num_total += len(os.listdir(imgs_dir))
@@ -85,11 +82,8 @@ for img_file in img_file_list:
             num_box += result[2]
             max_score = max(max_score, result[0])
     stat['name'].append(img_file)
-    stat['num_total'].append(len(os.listdir(imgs_dir)))
     stat['score'].append(max_score)
-    stat['num_tp'].append(i)
     stat['num_tp_ratio'].append(i/len(os.listdir(imgs_dir)))
-    num_pos += i
 scores = stat['score']
-print(num_total, num_pos, num_pos/num_total, np.array(scores).mean())
+print(np.array(scores).mean())
 print(stat)
