@@ -1,89 +1,75 @@
-import torch
 import os
-from PIL import Image
 import cv2
+import xml.dom.minidom as dom
 import numpy as np
+import torch
 import torchvision.transforms as transforms
+import shutil
+import pandas as pd
+from mmdet.apis import init_detector, inference_detector
+import mmcv
+from Anchor_generator import bbox_overlaps
+from sklearn.metrics import roc_auc_score
+from PIL import Image
+from collections import defaultdict
 
-# evaluation on the control group and the validation set
-device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-def showbbox(model, img, img_name, imgs_save_dir=None):
-    """
-    :param model: trained Faster R-CNN model
-    :param img: torch tensor with a value range between 0 and 1
-    :param img_name: image name for saving the image
-    """
-    model.eval()
-    threshold = 0.3
+os.environ["CUDA_VISIBLE_DEVICES"] = '1, 2, 3'
 
-    with torch.no_grad():
-        '''
-        prediction has a format of：
-        [{'boxes': tensor([[1492.6672,  238.4670, 1765.5385,  315.0320],
-        [ 887.1390,  256.8106, 1154.6687,  330.2953]], device='cuda:0'),
-        'labels': tensor([1, 1], device='cuda:0'),
-        'scores': tensor([1.0000, 1.0000], device='cuda:0')}]
-        '''
-        prediction = model([img.to(device)])
+# MMdetection
+config_file = '/data/ljm/mmdetection/configs/DBD/Faster_DBD_Config.py'
+model_paths = ['/data/ljm/LRCN/LITS2017肝脏肿瘤分割挑战数据集/DBD/Faster_R-CNN_50/fold1.pth',
+               '/data/ljm/LRCN/LITS2017肝脏肿瘤分割挑战数据集/DBD/Faster_R-CNN_50/fold2.pth',
+               '/data/ljm/LRCN/LITS2017肝脏肿瘤分割挑战数据集/DBD/Faster_R-CNN_50/fold3.pth',
+               '/data/ljm/LRCN/LITS2017肝脏肿瘤分割挑战数据集/DBD/Faster_R-CNN_50/fold4.pth']
 
-    if prediction[0]['boxes'].size(0) == 0:
-        return None
-    image = Image.open(os.path.join(imgs_dir, img_name))
-    image = image.convert(mode='RGB')
-    crop = transforms.CenterCrop((275, 421))
-    image = crop(image)
-    image = np.array(image)
-    pred_score = list(prediction[0]['scores'].detach().cpu().numpy())
-    pred_score_list = [pred_score.index(x) for x in pred_score if x > threshold]
-    if len(pred_score_list) == 0:
-        return None
+val_case_dir = '/data/ljm/LRCN/case_CT_with_DBD'
 
-    score = sorted(pred_score)[-1]
+val_cases = [['process_1', 'process_2', 'process_3', 'process_4'],
+             ['process_5', 'process_6', 'process_7', 'process_8'],
+             ['process_9', 'process_10', 'process_11', 'process_12'],
+             ['process_13', 'process_14', 'process_15', 'process_16']]
 
-    dts = []
-    for idx in pred_score_list:
-        box = prediction[0]['boxes'][idx]
-        xmin = round(box[0].item())
-        ymin = round(box[1].item())
-        xmax = round(box[2].item())
-        ymax = round(box[3].item())
-        # print(xmin, ymin, xmax, ymax)
-        dts.append([xmin, ymin, xmax, ymax])
-        image = cv2.rectangle(image, (xmin, ymin), (xmax, ymax), (0, 255, 255), thickness=2)
-
-    if imgs_save_dir is not None:
-        cv2.imwrite(os.path.join(imgs_save_dir, img_name), image)
-
-    return score, dts, len(pred_score_list)
+val_control_dir = '/data/ljm/LRCN/new_control_CT_imgs_PSM'
 
 
-model_path = '/data/ljm/LRCN/LITS2017肝脏肿瘤分割挑战数据集/fold_1_2_3_4.pth'   # need change
-model = torch.load(model_path)
-model.to(device)
+## tpr, fpr means I-PP value for the case group and the matched control group separately
 
-img_file_dir = '/data/ljm/LRCN/case_CT'
-img_file_list = ['process_1', 'process_2', 'process_3', 'process_4']         # need change
-stat = {'score': [], 'name': [], 'num_tp_ratio': []}
-for img_file in img_file_list:
-    imgs_dir = os.path.join(img_file_dir,  img_file)
-    num_total += len(os.listdir(imgs_dir))
-    i = 0
-    max_score = 0
-    num_box = 0
-    for img_name in os.listdir(imgs_dir):
-        img_path = os.path.join(imgs_dir, img_name)
-        img = Image.open(img_path)
-        img = img.convert(mode='RGB')
-        transform = transforms.Compose([transforms.CenterCrop((275, 421)), transforms.ToTensor()])
-        img = transform(img)
-        result = showbbox(model, img, img_name)
-        if result is not None:
-            i += 1
-            num_box += result[2]
-            max_score = max(max_score, result[0])
-    stat['name'].append(img_file)
-    stat['score'].append(max_score)
-    stat['num_tp_ratio'].append(i/len(os.listdir(imgs_dir)))
-scores = stat['score']
-print(np.array(scores).mean())
-print(stat)
+def tpr_fpr_cal(config_file, checkpoint_file, val_case_name=(), thr=0.3, mode='tpr', device='cuda:1'):
+
+    model = init_detector(config_file, checkpoint_file, device=device)
+
+    if mode == 'tpr':
+        num_total_imgs = [0 for _ in val_case_name]  
+        num_pos_imgs = [0 for _ in val_case_name]
+        for i in range(4):
+            patients_imgs_dir = os.path.join(val_case_dir, val_case_name[i])
+            n_imgs = len(os.listdir(patients_imgs_dir))
+            num_total_imgs[i] += n_imgs
+
+            for img_name in os.listdir(patients_imgs_dir):
+                img_path = os.path.join(patients_imgs_dir, img_name)
+                result = inference_detector(model, img_path)[0]
+                if len(result) > 0 and np.any(result[:, 4] >= thr):
+                    num_pos_imgs[i] += 1
+
+        tpr = [round(num_pos_imgs[j] / num_total_imgs[j], 2) for j in range(len(val_case_name))]
+
+        return tpr
+    elif mode == 'fpr':
+        val_control_name = os.listdir(val_control_dir)
+        val_control_name.sort()
+        num_total_imgs = [0 for _ in val_control_name]
+        num_pos_imgs = [0 for _ in val_control_name]
+        
+        for i, name in enumerate(val_control_name):
+            imgs_dir = os.path.join(val_control_dir, name)
+            imgs_list = os.listdir(imgs_dir)
+            num_total_imgs[i] += len(imgs_list)
+            for img_name in imgs_list:
+                img_path = os.path.join(imgs_dir, img_name)
+                result = inference_detector(model, img_path)[0]
+                if len(result) > 0 and np.any(result[:, 4] >= thr):
+                    num_pos_imgs[i] += 1
+
+        fpr = [round(num_pos_imgs[j] / num_total_imgs[j], 3) for j in range(len(val_control_name))]
+        return fpr
