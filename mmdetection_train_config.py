@@ -1,3 +1,8 @@
+_base_ = [
+    '../_base_/models/faster_rcnn_r50_fpn.py',
+    '../_base_/datasets/voc0712.py',
+    '../_base_/schedules/schedule_2x.py', '../_base_/default_runtime.py']
+
 # model settings
 model = dict(
     type='FasterRCNN',
@@ -172,5 +177,5 @@ optimizer = dict(type='SGD', lr=0.02/8, momentum=0.9, weight_decay=0.0001)
 
 checkpoint_config = dict(interval=1)
 load_from = '/data/ljm/mmdetection/checkpoints/faster_rcnn_r50_fpn_2x_coco_bbox_mAP-0.384_20200504_210434-a5d8aa15.pth'
-work_dir = '/data/ljm/LRCN/LITS2017肝脏肿瘤分割挑战数据集/DBD/Faster_R-CNN_50_2rd'
+work_dir = '/data/ljm/LRCN/LITS2017肝脏肿瘤分割挑战数据集/DBD/Faster_R-CNN_50'
 gpu_ids = range(0, 1)
